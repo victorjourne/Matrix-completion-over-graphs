@@ -8,23 +8,26 @@ import pandas as pd
 from itertools import *
 import numpy as np
 import matplotlib.pyplot as plt
-import cvxpy
-users = {'sex' :['H','F'],
-         'age' :['<20','>30']}
-movies = {'genre':['Am','Gu','Co'],
-          'sortie':['>2000','<1980']}
-tuplesU = list(product(*users.values()))
-tuplesM = list(product(*movies.values()))
+from cvxpy import *
+
+category = {'users' : {'sex' :['H','F'],
+                     'age' :['<20','>30']},
+
+            'movies' : {'genre':['Am','Gu','Co'],
+                      'sortie':['>2000','<1980']}
+            }
+            
+tuplesU = list(product(*category['users'].values()))
+tuplesM = list(product(*category['movies'].values()))
 
 index = pd.MultiIndex.from_tuples(tuplesU, 
-                                    names=users.keys())
+                                    names=category['users'].keys())
 columns = pd.MultiIndex.from_tuples(tuplesM, 
-                                  names=movies.keys())
+                                  names=category['movies'].keys())
 
-scores = [[3,2,4,2,1,3],[2,1,3,3,2,5],[2,5,2,4,1,2],[1,4,1,2,5,3]]
+scores = [[3,2,4,3,1,3],[2,1,3,2,2,5],[2,5,2,4,1,2],[1,4,1,2,5,3]]
 # buid table of scores by groups
 scoresGroup = pd.DataFrame(index=index,columns=columns,data = scores)
-
 scoresGroup.ix[('>30','H')].ix[('Am','>2000')]
 # define nb of users in each groups
 nbU = np.random.randint(10,14,len(tuplesU))
@@ -32,62 +35,61 @@ nbM = np.random.randint(8,12,len(tuplesM))
 
 # Build matrix A
 # buid columns and index with hierachical level
-u = []
-it=0
-for g,n in zip(tuplesU,nbU):
-    u+=[g+ (i,) for i in range(it,it+n)]
-    it +=n
-indexU =  pd.MultiIndex.from_tuples(u, 
-                                    names=list(users.keys())+['users'])
-m = []
-it=0
-for g,n in zip(tuplesM,nbM):
-    m+=[g+(i,) for i in range(it,it+n)]
-    it +=n
-columnsM =  pd.MultiIndex.from_tuples(m, 
-                                    names=list(movies.keys())+['movies'])    
+def build_individus(name,nbInd):
+    tuplesInd = list(product(*category[name].values()))
+    u = []
+    it=0
+    for g,n in zip(tuplesInd,nbInd):
+        u+=[g+ (i,) for i in range(it,it+n)]
+        it +=n
+    index =  pd.MultiIndex.from_tuples(u, 
+                                        names=list(category[name].keys())+[name])
+    return index
 
-# Mtrice A creation  
-A = pd.DataFrame(index=indexU,columns = columnsM)
-print(A)
+# Mtrice Users/Movies creation  
+def build_matriceUM(nbU,nbM):
+    A = pd.DataFrame(index=    build_individus('users',nbU),
+                 columns = build_individus('movies',nbM))
+    # fill the matrix according to scoresGroup
+    for blockM,blockU in product(tuplesM,tuplesU):
+        A.loc[blockU,blockM] = scoresGroup.ix[blockU].ix[blockM]
+    # shuffle lign and columns
+    A = A.sample(frac=1,axis=0)
+    A = A.sample(frac=1,axis=1)
+    return A
+    
+UM = build_matriceUM(nbU,nbM)
+print(UM.head())
 # To access to a block: example of functions pandas
-A.loc[('>30','H'),('Am','>2000')] = scoresGroup.ix[('>30','H')].ix[('Am','>2000')]
-A.index.get_level_values('sex')
-# fill the matrix according to scoresGroup
-for blockM,blockU in product(tuplesM,tuplesU):
-#    print blockM,blockU 
-    A.loc[blockU,blockM] = scoresGroup.ix[blockU].ix[blockM]
-# shuffle lign and columns
-A = A.sample(frac=1,axis=0)
-A = A.sample(frac=1,axis=1)
-A.index.get_level_values('users')
+UM.loc[('>30','H'),('Am','>2000')] = scoresGroup.ix[('>30','H')].ix[('Am','>2000')]
+UM.index.get_level_values('sex')
+
+UM.index.get_level_values('users')
 A.columns.get_level_values('movies')
 # Fill out matrix A
 def mask(u, v, proportion = 0.3):
     mat_mask = np.random.binomial(1, proportion, size =  (u, v))
     print("We observe {} per cent of the entries of a {}*{} matrix".format(100 * mat_mask.mean(),u, v))
     return mat_mask
-mat_mask = mask(*A.shape,proportion=0.1)
-A_mask = mat_mask*A
-# Create matrix of weigths
+mat_mask = mask(*UM.shape,proportion=0.2)
+UM_mask = mat_mask*UM
+# CreUMte matrix of weigths
+def build_weight(index,group):
+    Weight = pd.DataFrame(index = index,columns=index,data=0)
+    for row,col in zip(group,group):#product(tuplesU,tuplesU)
+        Weight.loc[row,col]= 1 #nbOfCommonFeature
+    return Weight
 
-WeightU = pd.DataFrame(index = indexU,columns=indexU,data=0)
-for row,col in zip(tuplesU,tuplesU):#product(tuplesU,tuplesU)
-    nbOfCommonFeature = len(set(row) & set(col))
-    WeightU.loc[row,col] = 1 #nbOfCommonFeature
+WeightU = build_weight(UM.index,tuplesU)
+WeightM = build_weight(UM.columns,tuplesM)
 
-WeightM = pd.DataFrame(index = columnsM,columns=columnsM,data=0)
-for row,col in zip(tuplesM,tuplesM):
-    nbOfCommonFeature = len(set(row) & set(col))
-    WeightM.loc[row,col] = 1 #nbOfCommonFeature
-# shuffle lign and columns according to A shuffling
-WeightU = WeightU.loc[A.index,A.index]
-WeightM = WeightM.loc[A.columns,A.columns]
 #Build matrix L
-DM = np.diag(WeightM.sum(axis=0))
-LM = (DM-WeightM).values
-DU = np.diag(WeightU.sum(axis=0))
-LU = (DU-WeightU).values
+def build_L(Weight):
+    D =  np.diag(Weight.sum(axis=0))
+    L = (D-Weight).values
+    return L
+LM = build_L(WeightM)
+LU = build_L(WeightU)
 # try
 VU,PU = np.linalg.eigh(LU)
 VU1 = np.diag(np.sqrt(np.abs(VU)))
@@ -99,31 +101,29 @@ PM1 = np.dot(PM,VM1)
 #np.dot(PM1,PM1.T) ==LM
 # Resolution
 # test on users
-np.trace(np.dot(np.dot(PU1.T,A).T,np.dot(PU1.T,A)))
-np.trace(np.dot(A.T,np.dot(LU,A)))
+np.trace(np.dot(np.dot(PU1.T,UM).T,np.dot(PU1.T,UM)))
+np.trace(np.dot(UM.T,np.dot(LU,UM)))
 # test on movies
-np.trace(np.dot(A,np.dot(LM,A.T)))
-np.trace(np.dot(np.dot(A,PM1),np.dot(A,PM1).T))
+np.trace(np.dot(UM,np.dot(LM,UM.T)))
+np.trace(np.dot(np.dot(UM,PM1),np.dot(UM,PM1).T))
 
-np.dot(LM,(A.T).values)
+np.dot(LM,(UM.T).values)
 np.dot((A.T).values,LU)
 
-from cvxpy import *
+# find the solution
 print(installed_solvers())
-X = Variable(*A.shape)
+X = Variable(*UM.shape)
 
 obj = Minimize(norm(X, 'nuc')+norm(X*PM1, 'fro')+norm((PU1.T)*X, 'fro'))#
-constraints = [mul_elemwise(mat_mask, X) == mul_elemwise(mat_mask, np.array(A))]
+constraints = [mul_elemwise(mat_mask, X) == mul_elemwise(mat_mask, np.array(UM))]
 prob = Problem(obj, constraints)
 prob.solve(solver=SCS)
-X.value
-
-A_rebuild = pd.DataFrame(index = A.index,columns=A.columns,data=np.round(X.value,1))
+A_rebuild = pd.DataFrame(index = UM.index,columns=UM.columns,data=np.round(X.value,1))
 def rmse(A,B):
     rmse = ((A-B).values**2).mean()
     print("RMSE: %.2f" %rmse)
 #    return rmse
-rmse(A,A_rebuild)
+rmse(UM,UM_rebuild)
 
 
 # build Graph of users
